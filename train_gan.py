@@ -21,6 +21,7 @@ from sklearn.model_selection import train_test_split
 def load_data():
     #Loading the labels and image names from CSV, its format like this: "1" "Car", "2" "Plane", ...
     df = pd.read_csv('./cifar-10/trainLabels.csv')
+    #print(df.head())
     
     #Extracting the only column name which holds the labels
     label_column = df.columns[1]    
@@ -54,16 +55,30 @@ def load_data():
 
 def create_classifier(number_of_classes):
     model = Sequential()    
-    model.add(Conv2D(64, (3, 3), activation='relu', input_shape=(32, 32, 3)))
-    model.add(MaxPooling2D((2, 2)))  
-    model.add(Conv2D(128, (3, 3), activation='relu'))
+    model.add(Conv2D(32, (3, 3), activation='relu', padding='same' ,input_shape=(32, 32, 3)))
+    model.add(BatchNormalization()) 
+    model.add(Conv2D(32, (3,3), activation='relu', padding='same'))
+    model.add(MaxPooling2D((2, 2)))
     model.add(Dropout(0.2))
+    
+    model.add(Conv2D(64, (3, 3), activation='relu', padding='same'))
+    model.add(BatchNormalization())
+    model.add(Conv2D(64, (3, 3), activation='relu', padding='same'))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D((2,2)))
+    model.add(Dropout(0.3))
+    
+    model.add(Conv2D(128, (3,3), padding='same', activation='relu'))
+    model.add(BatchNormalization())
+    model.add(Conv2D(128, (3,3), padding='same', activation='relu'))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D((2,2)))
+    model.add(Dropout(0.4))
     model.add(Flatten())
+
     model.add(Dense(512, activation='relu'))
+    model.add(BatchNormalization())
     model.add(Dropout(0.5))
-    #Optional neuron layer (if needed)
-    #model.add(Dense(128, activation='relu'))
-    #model.add(Dropout(0.2))
     model.add(Dense(number_of_classes, activation='softmax'))
 
     return model
@@ -109,7 +124,7 @@ def train_classifier(model, images_train, labels_train, epochs, batch_size, vali
     model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy', precision, recall])
     
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.0004, verbose=1)
-    checkpoint = tf.keras.callbacks.ModelCheckpoint('classifier_model.h5', save_best_only=True, monitor='val_loss', mode='min')
+    checkpoint = tf.keras.callbacks.ModelCheckpoint('classifier_model.h5', save_best_only=True, monitor='val_accuracy', mode='min')
     
     datagen = ImageDataGenerator(
         rotation_range=15,
@@ -119,7 +134,7 @@ def train_classifier(model, images_train, labels_train, epochs, batch_size, vali
     )
     datagen.fit(images_train)
 
-    history = model.fit_generator(
+    history = model.fit(
         datagen.flow(images_train, labels_train, batch_size=batch_size),
         epochs=epochs,
         validation_data=validation_data,  
@@ -139,6 +154,7 @@ def train_classifier(model, images_train, labels_train, epochs, batch_size, vali
     print(f"Precision: {precision_val}")
     print(f"Recall: {recall_val}")
     print(f"F1-Score: {f1_val}")
+    model.save("classifier_model.h5")
 
 def feature_extractor_from_classifier(classifier_model):
     # Discard the last layer (output classification layer)
@@ -150,18 +166,22 @@ def feature_extractor_from_classifier(classifier_model):
 
     return model
   
-def save_generated_images(generator, epoch, number_of_classes, examples=2, dim=(1, 10), figsize=(10, 1)):
-    noise = np.random.normal(0, 1, [examples, 100])
+def save_generated_images(generator, epoch, number_of_classes, classify, examples=2, dim=(1, 2), figsize=(10, 1)):
+    # Use fixed noise for both images
+    fixed_noise = np.random.normal(0, 1, [1, 100])
+    noise = np.vstack([fixed_noise, fixed_noise])
     # Generate random labels for the generator
     sampled_labels = np.random.randint(0, number_of_classes, examples).reshape(-1, 1)
     sampled_labels = tf.keras.utils.to_categorical(sampled_labels, number_of_classes)
     generated_images = generator.predict([noise, sampled_labels])
-    
+    # Get predictions for generated images
+    predictions = np.argmax(classify.predict(generated_images), axis=-1)
     plt.figure(figsize=figsize)
     for i in range(examples):
         plt.subplot(dim[0], dim[1], i + 1)
         plt.imshow(generated_images[i], interpolation='nearest')
         plt.axis('off')
+        plt.text(5, 5, f"Label: {predictions[i]}", bbox=dict(facecolor='red', alpha=0.5))
     plt.tight_layout()
     plt.savefig('gan_generated_image_epoch_%d.png' % epoch)
     
@@ -210,7 +230,7 @@ def create_discriminator(input_shape=(32, 32, 3)):
     model.compile(loss='binary_crossentropy', optimizer=tf.keras.optimizers.Adam(0.0002, 0.5), metrics=['accuracy'])
     return model
 
-def train_gan(generator, discriminator, combined, feature_extractor, epochs, batch_size, images_train, labels_train, number_of_classes):
+def train_gan(generator, discriminator, combined, feature_extractor, epochs, batch_size, images_train, labels_train, number_of_classes, classifierM):
     mse_loss = MeanSquaredError()
     valid = np.ones((batch_size, 1))
     fake = np.zeros((batch_size, 1))
@@ -242,7 +262,7 @@ def train_gan(generator, discriminator, combined, feature_extractor, epochs, bat
 
         print(f"{epoch}/{epochs} [D loss: {d_loss[0]} | D accuracy: {100 * d_loss[1]}] [G loss: {g_loss}]")
         if epoch % 500 == 0:
-            save_generated_images(generator, epoch, number_of_classes)
+            save_generated_images(generator, epoch, number_of_classes, classifierM)
         
     generator.save("generator_model.h5")
 
@@ -274,6 +294,7 @@ if __name__ == "__main__":
             print("existing model found and loaded.")
         else:
             classifier = create_classifier(number_of_classes)
+            classifier.summary()
             print("new model instance created.")
 
         train_classifier(classifier, images_train, labels_train, epochs, batch_size, (images_val, labels_val))       
@@ -291,4 +312,4 @@ if __name__ == "__main__":
     combined = Model([noise, labels_input], validity)
     optimizer_com = tf.keras.optimizers.Adam(learning_rate = 0.0005)
     combined.compile(optimizer=optimizer_com, loss='binary_crossentropy')
-    train_gan(generator, discriminator, combined, feature_extractor,epochs, batch_size, images_train, labels_train, number_of_classes)
+    train_gan(generator, discriminator, combined, feature_extractor,epochs, batch_size, images_train, labels_train, number_of_classes, classifier)
