@@ -17,3 +17,10 @@ New approach shown it's benefits and validation accuracy reached 70% on my pretr
 Precision: 0.7215832630947135
 Recall: 0.7184
 F1-Score: 0.7088958283317461
+
+# Version 0.3.5
+Some discriminator revision, added batch normalization and additional layer. Minimal revision to classifier trainer code. It now exports the classifier after each epoch.
+Splitted classifier/GAN training phases. Moreover, they are now skipable. 35 epoch classifier training:
+Precision: 0.7195336983478448
+Recall: 0.7018
+F1-Score: 0.6911505132916511

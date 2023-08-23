@@ -13,7 +13,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 from keras.preprocessing.image import ImageDataGenerator
 from keras.models import Model, Sequential, load_model
-from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, Input, Concatenate, Reshape, Conv2DTranspose, LeakyReLU, BatchNormalization
+from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, Input, Concatenate, Reshape, Conv2DTranspose, LeakyReLU, BatchNormalization, SpectralNormalization
 from keras.losses import MeanSquaredError
 from sklearn.metrics import precision_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
@@ -123,8 +123,8 @@ def train_classifier(model, images_train, labels_train, epochs, batch_size, vali
 
     model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy', precision, recall])
     
-    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.0004, verbose=1)
-    checkpoint = tf.keras.callbacks.ModelCheckpoint('classifier_model.h5', save_best_only=True, monitor='val_accuracy', mode='min')
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=0.0001, verbose=1)
+    checkpoint = tf.keras.callbacks.ModelCheckpoint('classifier_model_epoch_{epoch}.h5', save_best_only=False, monitor='val_accuracy', mode='max')
     
     datagen = ImageDataGenerator(
         rotation_range=15,
@@ -154,7 +154,6 @@ def train_classifier(model, images_train, labels_train, epochs, batch_size, vali
     print(f"Precision: {precision_val}")
     print(f"Recall: {recall_val}")
     print(f"F1-Score: {f1_val}")
-    model.save("classifier_model.h5")
 
 def feature_extractor_from_classifier(classifier_model):
     # Discard the last layer (output classification layer)
@@ -217,13 +216,20 @@ def create_generator(latent_dim, num_classes):
 def create_discriminator(input_shape=(32, 32, 3)):
     model = Sequential()
     model.add(Conv2D(64, (3,3), strides=(2,2), padding='same', input_shape=input_shape))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(alpha=0.2))
+    model.add(Dropout(0.25))
+    
+    model.add(Conv2D(128, (3,3), strides=(2,2), padding='same'))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(alpha=0.2))
+    model.add(Dropout(0.3))
+
+    model.add(Conv2D(256, (3,3), strides=(2,2), padding='same'))
+    model.add(BatchNormalization())
     model.add(LeakyReLU(alpha=0.2))
     model.add(Dropout(0.4))
     
-    model.add(Conv2D(128, (3,3), strides=(2,2), padding='same'))
-    model.add(LeakyReLU(alpha=0.2))
-    model.add(Dropout(0.4))
-
     model.add(Flatten())
     model.add(Dense(1, activation='sigmoid'))
 
@@ -270,6 +276,7 @@ def train_gan(generator, discriminator, combined, feature_extractor, epochs, bat
 
 if __name__ == "__main__":
     epochs = int(input("Enter number of epochs for training classifier: "))
+    gan_epochs = int(input("Enter number of epochs for training GAN: "))
     batch_size = int(input("Enter batch size for training classifier: "))
     
     images_train, labels_train, class_labels = load_data()
@@ -299,17 +306,21 @@ if __name__ == "__main__":
 
         train_classifier(classifier, images_train, labels_train, epochs, batch_size, (images_val, labels_val))       
     
-    base_model = load_model('classifier_model.h5')
-    feature_extractor = feature_extractor_from_classifier(base_model)
-    generator = create_generator(100, number_of_classes)
-    discriminator = create_discriminator()
+    chechTrainGan = input("Do you want to skip training the GAN? (y/n)")
+    if (chechTrainGan == "y" or chechTrainGan == "Y"):
+        print("Skipped...")
+    else:   
+        base_model = load_model('classifier_model.h5')
+        feature_extractor = feature_extractor_from_classifier(base_model)
+        generator = create_generator(100, number_of_classes)
+        discriminator = create_discriminator()
     
-    noise = Input(shape=(100,))
-    labels_input = Input(shape=(number_of_classes,))
-    generated_images = generator([noise, labels_input])
-    validity = discriminator(generated_images)
+        noise = Input(shape=(100,))
+        labels_input = Input(shape=(number_of_classes,))
+        generated_images = generator([noise, labels_input])
+        validity = discriminator(generated_images)
 
-    combined = Model([noise, labels_input], validity)
-    optimizer_com = tf.keras.optimizers.Adam(learning_rate = 0.0005)
-    combined.compile(optimizer=optimizer_com, loss='binary_crossentropy')
-    train_gan(generator, discriminator, combined, feature_extractor,epochs, batch_size, images_train, labels_train, number_of_classes, classifier)
+        combined = Model([noise, labels_input], validity)
+        optimizer_com = tf.keras.optimizers.Adam(learning_rate = 0.0005)
+        combined.compile(optimizer=optimizer_com, loss='binary_crossentropy')
+        train_gan(generator, discriminator, combined, feature_extractor, gan_epochs, batch_size, images_train, labels_train, number_of_classes, base_model)
