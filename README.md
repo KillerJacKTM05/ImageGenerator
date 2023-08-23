@@ -24,3 +24,7 @@ Splitted classifier/GAN training phases. Moreover, they are now skipable. 35 epo
 Precision: 0.7195336983478448
 Recall: 0.7018
 F1-Score: 0.6911505132916511
+
+# Version 0.4
+When transfer learning seemed not improving for a while, a second file contains a typical conditional-NN has been added.
+It will mainly be used for understanding where the main problem happens for inability to train transfer NN.
