@@ -28,3 +28,6 @@ F1-Score: 0.6911505132916511
 # Version 0.4
 When transfer learning seemed not improving for a while, a second file contains a typical conditional-NN has been added.
 It will mainly be used for understanding where the main problem happens for inability to train transfer NN.
+
+# Version 0.5
+GPU accelerator added. Gan monitoring revised simpler but effective approach. Monitor prints sample images after each epoch, with it's labels.
