@@ -9,11 +9,13 @@ import cv2
 import os
 import numpy as np
 import pandas as pd
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from keras.models import Model, Sequential
+from tensorflow.keras.utils import to_categorical
 from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, Input, Concatenate, Reshape, Conv2DTranspose, LeakyReLU, BatchNormalization, SpectralNormalization
+from tensorflow.compat.v1.keras.backend import set_session
 from sklearn.model_selection import train_test_split
 
 def load_data():
@@ -102,7 +104,7 @@ def create_discriminator(input_shape=(32, 32, 3)):
 
 def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_classes):
     print("starting..")
-    
+    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
     # The loss function and optimizers
     loss_fn = tf.keras.losses.BinaryCrossentropy()
     d_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
@@ -112,11 +114,11 @@ def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_cl
     g_loss_metric = tf.keras.metrics.Mean()
 
     # Split dataset into batches
-    dataset = tf.data.Dataset.from_tensor_slices(images_t).shuffle(buffer_size=1024).batch(batch_size)
+    dataset = tf.data.Dataset.from_tensor_slices((images_t, labels_t)).shuffle(buffer_size=1024).batch(batch_size)
 
     for epoch in range(epochs):
         print(f"Starting epoch {epoch + 1}/{epochs}")
-        for idx, real_images in tqdm(enumerate(dataset), desc=f"Epoch {epoch + 1}", ncols=100):
+        for idx, (real_images, batch_labels) in tqdm(enumerate(dataset), desc=f"Epoch {epoch + 1}", ncols=100):
             batch_labels = labels_t[idx * batch_size: (idx + 1) * batch_size]
             # Calculate batch size dynamically
             batch_size = tf.shape(real_images)[0]
@@ -155,27 +157,37 @@ def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_cl
             g_loss_metric.update_state(g_loss)
 
         print(f"Epoch {epoch + 1} completed. D Loss: {d_loss_metric.result()} | G Loss: {g_loss_metric.result()}")
-        save_models(generator, discriminator, combined)
+        save_models(gen, disc, comb)
         # Use GANMonitor for visualization
-        monitor = GANMonitor(generator=gen, num_img=10, latent_dim=100)
+        monitor = SimpleGANMonitor(generator=gen, num_img=2, latent_dim=100, num_classes=number_of_classes)
         monitor.on_epoch_end(epoch)
 
-# The GANMonitor class remains unchanged from the cheat code
-class GANMonitor(tf.keras.callbacks.Callback):
-    def __init__(self, generator, num_img=3, latent_dim=128):
+class SimpleGANMonitor:
+    def __init__(self, generator, num_img=2, latent_dim=100, num_classes=10):
         self.generator = generator
         self.num_img = num_img
         self.latent_dim = latent_dim
+        self.num_classes = num_classes
 
-    def on_epoch_end(self, epoch, logs=None):
-        labels_for_generated_images = np.random.randint(0, number_of_classes, size=(batch_size,))
-        random_latent_vectors = tf.random.normal(shape=(self.num_img, self.latent_dim))
-        generated_images = self.generator([random_latent_vectors, labels_for_generated_images])
-        generated_images *= 255
-        generated_images.numpy()
-        for i in range(self.num_img):
-            img = tf.keras.utils.array_to_img(generated_images[i])
-            img.save("generated_img_%03d_%d.png" % (epoch, i))
+    def on_epoch_end(self, epoch):
+        # Randomly sample labels for generating images
+        random_labels = np.random.randint(0, self.num_classes, self.num_img)
+        random_labels_one_hot = to_categorical(random_labels, self.num_classes)
+
+        # Generate noise vector
+        noise = np.random.normal(0, 1, (self.num_img, self.latent_dim))
+
+        # Generate images
+        generated_images = self.generator.predict([noise, random_labels_one_hot])
+
+        # Rescale images from [-1, 1] to [0, 255]
+        generated_images = 0.5 * generated_images + 0.5
+        generated_images = np.clip(generated_images * 255, 0, 255).astype(np.uint8)
+
+        # Save images
+        for i, label in enumerate(random_labels):
+            filename = f"generated_image_label_{label}_epoch_{epoch+1}.png"
+            cv2.imwrite(filename, cv2.cvtColor(generated_images[i], cv2.COLOR_RGB2BGR))
 
 def save_models(generator, discriminator, combined):
     generator.save_weights('generator_weights.h5')
@@ -183,8 +195,13 @@ def save_models(generator, discriminator, combined):
     combined.save_weights('combined_weights.h5')
     
 if __name__ == "__main__":
+    #Allow gpu options
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
+    set_session(sess)
     gan_epochs = int(input("Enter number of epochs for training GAN: "))
-    batch_size = int(input("Enter batch size for training classifier: "))
+    batch_size = int(input("Enter batch size for training GAN: "))
     
     images_train, labels_train, class_labels = load_data()
     number_of_classes = len(class_labels)
