@@ -14,7 +14,8 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from keras.models import Model, Sequential
 from tensorflow.keras.utils import to_categorical
-from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, Input, Concatenate, Reshape, Conv2DTranspose, LeakyReLU, BatchNormalization, SpectralNormalization
+from tensorflow.keras import layers
+from keras.layers import Conv2D, Flatten, Dense, Dropout, Input, Concatenate, Reshape, Conv2DTranspose, LeakyReLU, BatchNormalization
 from tensorflow.compat.v1.keras.backend import set_session
 from sklearn.model_selection import train_test_split
 
@@ -49,52 +50,89 @@ def load_data():
 def normalize_data(images):
     images = np.array(images, dtype=np.float32) # Convert list to numpy array
     return images / 127.5 - 1
+
+# Residual Block
+def res_block(x, filters, kernel_size=3, stride=1, padding='same', activation='relu'):
+    x = Conv2D(filters, kernel_size=kernel_size, strides=stride, padding=padding)(x)
+    x = BatchNormalization()(x)
+    x = layers.Activation(activation)(x)
+    x = Conv2D(filters, kernel_size=kernel_size, strides=stride, padding=padding)(x)
+    x = BatchNormalization()(x)
+    x = layers.Activation(activation)(x)
+    return x
     
+# Updated Generator Model
 def create_generator(latent_dim, num_classes):
-    # Noise input
     noise_input = Input(shape=(latent_dim,))
-    
-    # Label input
     labels_input = Input(shape=(num_classes,))
-    labels_embedding = Dense(4 * 4 * 128, activation="relu")(labels_input)
+
+    labels_embedding = Dense(4 * 4 * 128)(labels_input)
     labels_embedding = Reshape((4, 4, 128))(labels_embedding)
 
-    # Process noise
-    noise_layer = Dense(4 * 4 * 128, activation='relu')(noise_input)
+    noise_layer = Dense(4 * 4 * 128)(noise_input)
     noise_layer = Reshape((4, 4, 128))(noise_layer)
 
-    # Merge noise and label embeddings
     merged_input = Concatenate()([noise_layer, labels_embedding])
 
-    # Continue with the rest of your generator architecture
-    x = Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', activation='relu')(merged_input)
+    # Downsampling
+    x = Conv2D(64, (4, 4), strides=(2, 2), padding='same')(merged_input)
     x = BatchNormalization(momentum=0.8)(x)
-    x = Conv2DTranspose(64, (4, 4), strides=(2, 2), padding='same', activation='relu')(x)
-    x = BatchNormalization(momentum=0.8)(x)
-    x = Conv2DTranspose(32, (4, 4), strides=(2, 2), padding='same', activation='relu')(x)
-    x = BatchNormalization(momentum=0.8)(x)
-    output_img = Conv2DTranspose(3, (3, 3), padding='same', activation='tanh')(x)
+    x = LeakyReLU()(x)
 
+    x = Conv2D(128, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU()(x)
+
+    filter = 256
+    # Residual blocks
+    for _ in range(6):
+        x = res_block(x, filter, 3, (3,3))
+    
+    # Upsampling
+    x = Conv2DTranspose(256, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.75)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.8)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(64, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.75)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(32, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.8)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(3, (4, 4), strides=(2, 2), padding='same')(x)
+    output_img = layers.Activation('tanh')(x)
+    
     model = Model([noise_input, labels_input], output_img)
-
     return model
 
+# Updated Discriminator Model
 def create_discriminator(input_shape=(32, 32, 3)):
     model = Sequential()
     model.add(Conv2D(64, (3,3), strides=(2,2), padding='same', input_shape=input_shape))
     model.add(BatchNormalization())
     model.add(LeakyReLU(alpha=0.2))
-    model.add(Dropout(0.25))
     
     model.add(Conv2D(128, (3,3), strides=(2,2), padding='same'))
     model.add(BatchNormalization())
     model.add(LeakyReLU(alpha=0.2))
-    model.add(Dropout(0.3))
 
     model.add(Conv2D(256, (3,3), strides=(2,2), padding='same'))
     model.add(BatchNormalization())
     model.add(LeakyReLU(alpha=0.2))
-    model.add(Dropout(0.4))
+    
+    model.add(Conv2D(512, (3,3), strides=(2,2), padding='same'))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(alpha=0.2))
+    
+    model.add(Conv2D(1024, (3,3), strides=(2,2), padding='same'))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(alpha=0.2))
     
     model.add(Flatten())
     model.add(Dense(1, activation='sigmoid'))
@@ -105,6 +143,11 @@ def create_discriminator(input_shape=(32, 32, 3)):
 def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_classes):
     print("starting..")
     print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+    
+    #plot metrics
+    epoch_d_loss = []
+    epoch_g_loss = []
+    
     # The loss function and optimizers
     loss_fn = tf.keras.losses.BinaryCrossentropy()
     d_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
@@ -115,10 +158,14 @@ def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_cl
 
     # Split dataset into batches
     dataset = tf.data.Dataset.from_tensor_slices((images_t, labels_t)).shuffle(buffer_size=1024).batch(batch_size)
+    #dataset = dataset.batch(batch_size, drop_remainder=True)
 
     for epoch in range(epochs):
         print(f"Starting epoch {epoch + 1}/{epochs}")
         for idx, (real_images, batch_labels) in tqdm(enumerate(dataset), desc=f"Epoch {epoch + 1}", ncols=100):
+            if real_images.shape[0] != batch_size:
+                continue  #no need for now anyway we are shuffling
+                
             batch_labels = labels_t[idx * batch_size: (idx + 1) * batch_size]
             # Calculate batch size dynamically
             batch_size = tf.shape(real_images)[0]
@@ -155,15 +202,28 @@ def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_cl
             # Update metrics
             d_loss_metric.update_state(d_loss)
             g_loss_metric.update_state(g_loss)
+            epoch_d_loss.append(d_loss_metric)
+            epoch_g_loss.append(g_loss_metric)
 
         print(f"Epoch {epoch + 1} completed. D Loss: {d_loss_metric.result()} | G Loss: {g_loss_metric.result()}")
         save_models(gen, disc, comb)
         # Use GANMonitor for visualization
-        monitor = SimpleGANMonitor(generator=gen, num_img=2, latent_dim=100, num_classes=number_of_classes)
+        monitor = SimpleGANMonitor(generator=gen, num_img=1, latent_dim=100, num_classes=number_of_classes)
         monitor.on_epoch_end(epoch)
+    
+    print("Training Finished..")    
+    # Plotting
+    plt.figure(figsize=(12, 6))
+    plt.plot(epoch_g_loss, label='Generator Loss')
+    plt.plot(epoch_d_loss, label='Discriminator Loss')
+    plt.title('Generator and Discriminator Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
 
 class SimpleGANMonitor:
-    def __init__(self, generator, num_img=2, latent_dim=100, num_classes=10):
+    def __init__(self, generator, num_img=1, latent_dim=100, num_classes=10):
         self.generator = generator
         self.num_img = num_img
         self.latent_dim = latent_dim
@@ -186,7 +246,7 @@ class SimpleGANMonitor:
 
         # Save images
         for i, label in enumerate(random_labels):
-            filename = f"generated_image_label_{label}_epoch_{epoch+1}.png"
+            filename = f"generated_image_label_{class_labels[label]}_epoch_{epoch+1}.png"
             cv2.imwrite(filename, cv2.cvtColor(generated_images[i], cv2.COLOR_RGB2BGR))
 
 def save_models(generator, discriminator, combined):

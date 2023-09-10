@@ -31,3 +31,6 @@ It will mainly be used for understanding where the main problem happens for inab
 
 # Version 0.5
 GPU accelerator added. Gan monitoring revised simpler but effective approach. Monitor prints sample images after each epoch, with it's labels.
+
+# Version 0.6
+New generator & Discriminator schemes. Switched to the GPU training. (Transfer learning training will be tried again later) 
