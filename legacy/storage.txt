@@ -1,0 +1,83 @@
+def create_discriminator(input_shape=(32, 32, 3)):
+    model = Sequential()
+    for i in range(6):
+        model.add(Conv2D(64 * (2 ** (i // 2)), (3, 3), strides=(1 if i == 0 else 2, 1 if i == 0 else 2), padding='same', input_shape=input_shape))
+        model.add(LeakyReLU(alpha=0.01))
+    model.add(Flatten())
+    model.add(Dense(1, activation='sigmoid'))
+
+    model.compile(loss='binary_crossentropy', optimizer=tf.keras.optimizers.Adam(0.0002, 0.5), metrics=['accuracy'])
+    return model
+
+# Updated Generator Model
+def create_generator(latent_dim, num_classes):
+    noise_input = Input(shape=(latent_dim,))
+    labels_input = Input(shape=(num_classes,))
+
+    labels_embedding = Dense(4 * 4 * 128)(labels_input)
+    labels_embedding = Reshape((4, 4, 128))(labels_embedding)
+
+    noise_layer = Dense(4 * 4 * 128)(noise_input)
+    noise_layer = Reshape((4, 4, 128))(noise_layer)
+
+    merged_input = Concatenate()([noise_layer, labels_embedding])
+
+    # Downsampling
+    x = Conv2D(64, (4, 4), strides=(2, 2), padding='same')(merged_input)
+    x = BatchNormalization(momentum=0.8)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2D(128, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization()(x)
+    x = LeakyReLU()(x)
+
+    filter = 256
+    # Residual blocks
+    for _ in range(6):
+        x = res_block(x, filter, 3, (3,3))
+    
+    # Upsampling
+    x = Conv2DTranspose(256, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.75)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.8)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(64, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.75)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(32, (4, 4), strides=(2, 2), padding='same')(x)
+    x = BatchNormalization(momentum=0.8)(x)
+    x = LeakyReLU()(x)
+
+    x = Conv2DTranspose(3, (4, 4), strides=(2, 2), padding='same')(x)
+    output_img = layers.Activation('tanh')(x)
+    
+    model = Model([noise_input, labels_input], output_img)
+    return model
+
+
+# Residual Block
+def res_block(x, filters, kernel_size=3, stride=1, padding='same', activation='relu'):
+    shortcut = x
+    
+    # First convolution layer
+    x = Conv2D(filters, kernel_size=kernel_size, strides=stride, padding=padding)(x)
+    x = BatchNormalization()(x)
+    x = layers.Activation(activation)(x)
+    
+    # Second convolution layer
+    x = Conv2D(filters, kernel_size=kernel_size, strides=stride, padding=padding)(x)
+    x = BatchNormalization()(x)
+    
+    # 1x1 Convolution on the shortcut path to match dimensions
+    shortcut = Conv2D(filters, kernel_size=(1, 1), strides=stride, padding='same')(shortcut)
+    
+    # Adding the shortcut to the output (Skip Connection)
+    x = layers.Add()([x, shortcut])
+    x = layers.Activation(activation)(x)
+    
+    return x

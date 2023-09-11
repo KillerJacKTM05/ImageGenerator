@@ -32,5 +32,6 @@ It will mainly be used for understanding where the main problem happens for inab
 # Version 0.5
 GPU accelerator added. Gan monitoring revised simpler but effective approach. Monitor prints sample images after each epoch, with it's labels.
 
-# Version 0.6
-New generator & Discriminator schemes. Switched to the GPU training. (Transfer learning training will be tried again later) 
+# Version 0.6 - 0.6.5
+New generator & Discriminator schemes. Switched to the GPU training. 50 epoch training gave some meaningful images for labels but d_loss : 0.27 , g_loss : 2.5 . They are somewhat not ideal for a proper gan.
+Simple image generator program script added. It gives 256*256 image samples with 0 to 0 user input.

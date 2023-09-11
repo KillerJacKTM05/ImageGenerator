@@ -50,65 +50,46 @@ def load_data():
 def normalize_data(images):
     images = np.array(images, dtype=np.float32) # Convert list to numpy array
     return images / 127.5 - 1
-
-# Residual Block
-def res_block(x, filters, kernel_size=3, stride=1, padding='same', activation='relu'):
-    x = Conv2D(filters, kernel_size=kernel_size, strides=stride, padding=padding)(x)
-    x = BatchNormalization()(x)
-    x = layers.Activation(activation)(x)
-    x = Conv2D(filters, kernel_size=kernel_size, strides=stride, padding=padding)(x)
-    x = BatchNormalization()(x)
-    x = layers.Activation(activation)(x)
-    return x
     
 # Updated Generator Model
 def create_generator(latent_dim, num_classes):
+    # Latent space input
     noise_input = Input(shape=(latent_dim,))
-    labels_input = Input(shape=(num_classes,))
-
-    labels_embedding = Dense(4 * 4 * 128)(labels_input)
-    labels_embedding = Reshape((4, 4, 128))(labels_embedding)
-
-    noise_layer = Dense(4 * 4 * 128)(noise_input)
-    noise_layer = Reshape((4, 4, 128))(noise_layer)
-
-    merged_input = Concatenate()([noise_layer, labels_embedding])
-
-    # Downsampling
-    x = Conv2D(64, (4, 4), strides=(2, 2), padding='same')(merged_input)
-    x = BatchNormalization(momentum=0.8)(x)
-    x = LeakyReLU()(x)
-
-    x = Conv2D(128, (4, 4), strides=(2, 2), padding='same')(x)
-    x = BatchNormalization()(x)
-    x = LeakyReLU()(x)
-
-    filter = 256
-    # Residual blocks
-    for _ in range(6):
-        x = res_block(x, filter, 3, (3,3))
     
-    # Upsampling
-    x = Conv2DTranspose(256, (4, 4), strides=(2, 2), padding='same')(x)
-    x = BatchNormalization(momentum=0.75)(x)
-    x = LeakyReLU()(x)
-
+    # Label input
+    label_input = Input(shape=(num_classes,))
+    
+    # Embedding for categorical input (labels)
+    label_embedding = Dense(4 * 4 * 256)(label_input)
+    label_embedding = Reshape((4, 4, 256))(label_embedding)
+    
+    # Foundation for 4x4 image
+    n_nodes = 256 * 4 * 4
+    noise_layer = Dense(n_nodes)(noise_input)
+    noise_layer = LeakyReLU(alpha=0.2)(noise_layer)
+    noise_layer = Reshape((4, 4, 256))(noise_layer)
+    
+    # Merge inputs
+    merge = Concatenate()([noise_layer, label_embedding])
+    
+    # Upsample to 8x8
+    x = Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same')(merge)
+    x = LeakyReLU(alpha=0.2)(x)
+    
+    # Upsample to 16x16
     x = Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same')(x)
-    x = BatchNormalization(momentum=0.8)(x)
-    x = LeakyReLU()(x)
-
-    x = Conv2DTranspose(64, (4, 4), strides=(2, 2), padding='same')(x)
-    x = BatchNormalization(momentum=0.75)(x)
-    x = LeakyReLU()(x)
-
-    x = Conv2DTranspose(32, (4, 4), strides=(2, 2), padding='same')(x)
-    x = BatchNormalization(momentum=0.8)(x)
-    x = LeakyReLU()(x)
-
-    x = Conv2DTranspose(3, (4, 4), strides=(2, 2), padding='same')(x)
-    output_img = layers.Activation('tanh')(x)
+    x = LeakyReLU(alpha=0.2)(x)
     
-    model = Model([noise_input, labels_input], output_img)
+    # Upsample to 32x32
+    x = Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same')(x)
+    x = LeakyReLU(alpha=0.2)(x)
+    
+    # Output layer
+    output_img = Conv2D(3, (3, 3), activation='tanh', padding='same')(x)
+    
+    # Define and compile the model
+    model = Model([noise_input, label_input], output_img)
+    
     return model
 
 # Updated Discriminator Model
@@ -122,19 +103,16 @@ def create_discriminator(input_shape=(32, 32, 3)):
     model.add(BatchNormalization())
     model.add(LeakyReLU(alpha=0.2))
 
+    model.add(Conv2D(128, (3,3), strides=(2,2), padding='same'))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(alpha=0.2))
+    
     model.add(Conv2D(256, (3,3), strides=(2,2), padding='same'))
     model.add(BatchNormalization())
     model.add(LeakyReLU(alpha=0.2))
     
-    model.add(Conv2D(512, (3,3), strides=(2,2), padding='same'))
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(alpha=0.2))
-    
-    model.add(Conv2D(1024, (3,3), strides=(2,2), padding='same'))
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(alpha=0.2))
-    
     model.add(Flatten())
+    model.add(Dropout(0.4))
     model.add(Dense(1, activation='sigmoid'))
 
     model.compile(loss='binary_crossentropy', optimizer=tf.keras.optimizers.Adam(0.0002, 0.5), metrics=['accuracy'])
@@ -150,7 +128,7 @@ def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_cl
     
     # The loss function and optimizers
     loss_fn = tf.keras.losses.BinaryCrossentropy()
-    d_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    d_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0002)
     g_optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
 
     d_loss_metric = tf.keras.metrics.Mean()
@@ -173,25 +151,22 @@ def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_cl
             # Produce random vectors in the latent space
             random_latent_vectors = tf.random.normal(shape=(batch_size, 100))  # Assuming latent_dim=100
             
-            # Fake images generation
-            generated_images = gen([random_latent_vectors, batch_labels])
+            # Train the Discriminator 5 times
+            for _ in range(5):
+                generated_images = gen([random_latent_vectors, batch_labels])
+                real_labels = tf.zeros((batch_size, 1))
+                fake_labels = tf.ones((batch_size, 1))
+                labels = tf.concat([real_labels, fake_labels], axis=0)
+                labels += 0.05 * tf.random.uniform(tf.shape(labels))
+                combined_images = tf.concat([real_images, generated_images], axis=0)
+            
+                with tf.GradientTape() as tape:
+                    predictions = disc(combined_images)
+                    d_loss = loss_fn(labels, predictions)
+                grads = tape.gradient(d_loss, disc.trainable_weights)
+                d_optimizer.apply_gradients(zip(grads, disc.trainable_weights))
 
-            # Labels for the discriminator
-            real_labels = tf.zeros((batch_size, 1))
-            fake_labels = tf.ones((batch_size, 1))
-            labels = tf.concat([real_labels, fake_labels], axis=0)
-            labels += 0.05 * tf.random.uniform(tf.shape(labels))
-
-            combined_images = tf.concat([real_images, generated_images], axis=0)
-
-            # Train the discriminator
-            with tf.GradientTape() as tape:
-                predictions = disc(combined_images)
-                d_loss = loss_fn(labels, predictions)
-            grads = tape.gradient(d_loss, disc.trainable_weights)
-            d_optimizer.apply_gradients(zip(grads, disc.trainable_weights))
-
-            # Train the generator
+            # Train the Generator
             misleading_labels = tf.zeros((batch_size, 1))
             with tf.GradientTape() as tape:
                 predictions = disc(gen([random_latent_vectors, batch_labels]))
@@ -202,16 +177,16 @@ def train_gan(gen, disc, comb, epochs, batch_size, images_t, labels_t, num_of_cl
             # Update metrics
             d_loss_metric.update_state(d_loss)
             g_loss_metric.update_state(g_loss)
-            epoch_d_loss.append(d_loss_metric)
-            epoch_g_loss.append(g_loss_metric)
+            epoch_d_loss.append(d_loss)
+            epoch_g_loss.append(g_loss)
 
         print(f"Epoch {epoch + 1} completed. D Loss: {d_loss_metric.result()} | G Loss: {g_loss_metric.result()}")
-        save_models(gen, disc, comb)
         # Use GANMonitor for visualization
         monitor = SimpleGANMonitor(generator=gen, num_img=1, latent_dim=100, num_classes=number_of_classes)
         monitor.on_epoch_end(epoch)
     
-    print("Training Finished..")    
+    print("Training Finished..")  
+    save_models(gen, disc, comb)
     # Plotting
     plt.figure(figsize=(12, 6))
     plt.plot(epoch_g_loss, label='Generator Loss')
@@ -289,6 +264,6 @@ if __name__ == "__main__":
     validity = discriminator(generated_images)
 
     combined = Model([noise, labels_input], validity)
-    optimizer_com = tf.keras.optimizers.Adam(learning_rate = 0.00002)
+    optimizer_com = tf.keras.optimizers.Adam(learning_rate = 0.0002)
     combined.compile(optimizer=optimizer_com, loss='binary_crossentropy')
     train_gan(generator, discriminator, combined, gan_epochs, batch_size, images_train, labels_train, number_of_classes)
